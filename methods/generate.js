@@ -125,11 +125,11 @@ module.exports = async (parm) => {
     if (format === 'png') quoteImage = await imageSharp.png().toBuffer()
     else quoteImage = await imageSharp.webp({ lossless: true, force: true }).toBuffer()
   } else if (type === 'image') {
-    const padding = 25
+    const padding = 25 * parm.scale
 
     const canvasImage = await loadImage(canvasQuote.toBuffer())
 
-    const canvasPic = createCanvas(canvasImage.width + padding * 2, canvasImage.height + padding * 2)
+    const canvasPic = createCanvas(canvasImage.width + padding * 1.7, canvasImage.height + padding * 1.7)
     const canvasPicCtx = canvasPic.getContext('2d')
 
     canvasPicCtx.fillStyle = lighten(parm.backgroundColor, 20)

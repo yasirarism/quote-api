@@ -277,6 +277,10 @@ class QuoteGenerate {
           style.push(entity.type)
         }
 
+        if (entity.type === 'custom_emoji') {
+          styledChar[entity.offset].customEmojiId = entity.custom_emoji_id
+        }
+
         for (let charIndex = entity.offset; charIndex < entity.offset + entity.length; charIndex++) {
           styledChar[charIndex].style = styledChar[charIndex].style.concat(style)
         }
@@ -330,6 +334,7 @@ class QuoteGenerate {
 
         if (charStyle.style) styledWords[stringNum].style = charStyle.style
         if (charStyle.emoji) styledWords[stringNum].emoji = charStyle.emoji
+        if (charStyle.customEmojiId) styledWords[stringNum].customEmojiId = charStyle.customEmojiId
       } else styledWords[stringNum].word += charStyle.char
     }
 
@@ -338,6 +343,43 @@ class QuoteGenerate {
 
     let textWidth = 0
 
+    // load custom emoji
+    const customEmojiIds = []
+
+    for (let index = 0; index < styledWords.length; index++) {
+      const word = styledWords[index]
+
+      if (word.customEmojiId) {
+        customEmojiIds.push(word.customEmojiId)
+      }
+    }
+
+    const getCustomEmojiStickers = await this.telegram.callApi('getCustomEmojiStickers', {
+      custom_emoji_ids: customEmojiIds
+    }).catch(() => {})
+
+    const customEmojiStickers = {}
+
+    const loadCustomEmojiStickerPromises = []
+
+    for (let index = 0; index < getCustomEmojiStickers.length; index++) {
+      const sticker = getCustomEmojiStickers[index]
+
+      loadCustomEmojiStickerPromises.push((async () => {
+        const getFileLink = await this.telegram.getFileLink(sticker.thumb.file_id).catch(() => {})
+
+        if (getFileLink) {
+          const load = await loadImageFromUrl(getFileLink).catch(() => {})
+          const imageSharp = sharp(load)
+          const sharpPng = await imageSharp.png({ lossless: true, force: true }).toBuffer()
+
+          customEmojiStickers[sticker.custom_emoji_id] = await loadImage(sharpPng).catch(() => {})
+        }
+      })())
+    }
+
+    await Promise.all(loadCustomEmojiStickerPromises).catch(() => {})
+
     let breakWrite = false
     for (let index = 0; index < styledWords.length; index++) {
       const styledWord = styledWords[index]
@@ -345,16 +387,20 @@ class QuoteGenerate {
       let emojiImage
 
       if (styledWord.emoji) {
-        const emojiImageBase = emojiImageJson[styledWord.emoji.code]
-        if (emojiImageBase) {
-          emojiImage = await loadImage(
-            Buffer.from(emojiImageBase, 'base64')
-          ).catch(() => {})
-        }
-        if (!emojiImage) {
-          emojiImage = await loadImage(
-            Buffer.from(fallbackEmojiImageJson[styledWord.emoji.code], 'base64')
-          ).catch(() => {})
+        if (styledWord.customEmojiId && customEmojiStickers[styledWord.customEmojiId]) {
+          emojiImage = customEmojiStickers[styledWord.customEmojiId]
+        } else {
+          const emojiImageBase = emojiImageJson[styledWord.emoji.code]
+          if (emojiImageBase) {
+            emojiImage = await loadImage(
+              Buffer.from(emojiImageBase, 'base64')
+            ).catch(() => {})
+          }
+          if (!emojiImage) {
+            emojiImage = await loadImage(
+              Buffer.from(fallbackEmojiImageJson[styledWord.emoji.code], 'base64')
+            ).catch(() => {})
+          }
         }
       }
 
@@ -414,7 +460,7 @@ class QuoteGenerate {
           lineWidth = lineX + canvasCtx.measureText(styledWord.word).width
           breakWrite = true
         } else {
-          if (styledWord.emoji) lineWidth = textX + fontSize + (fontSize * 0.15)
+          if (styledWord.emoji) lineWidth = textX + fontSize + (fontSize * 0.2)
           else lineWidth = textX + canvasCtx.measureText(styledWord.word).width
 
           lineX = textX
@@ -422,11 +468,13 @@ class QuoteGenerate {
         }
       }
 
+      if (styledWord.emoji) lineWidth += (fontSize * 0.2)
+
       if (lineWidth > textWidth) textWidth = lineWidth
       if (textWidth > maxWidth) textWidth = maxWidth
 
       if (emojiImage) {
-        canvasCtx.drawImage(emojiImage, lineX, lineY - fontSize + (fontSize * 0.15), fontSize, fontSize)
+        canvasCtx.drawImage(emojiImage, lineX, lineY - fontSize + (fontSize * 0.15), fontSize + (fontSize * 0.22), fontSize + (fontSize * 0.22))
       } else {
         canvasCtx.fillText(styledWord.word, lineX, lineY)
 
@@ -755,10 +803,31 @@ class QuoteGenerate {
     const nameSize = 22 * scale
 
     let nameCanvas
-    if (message.from.name) {
+    if (message?.from?.name) {
+      let name = message.from.name.trim()
+
+      const nameEntities = [
+        {
+          type: 'bold',
+          offset: 0,
+          length: name.length
+        }
+      ]
+
+      if (message.from.emoji_status) {
+        name += ' 🤡'
+
+        nameEntities.push({
+          type: 'custom_emoji',
+          offset: name.length - 2,
+          length: 2,
+          custom_emoji_id: message.from.emoji_status
+        })
+      }
+
       nameCanvas = await this.drawMultilineText(
-        message.from.name,
-        'bold',
+        name,
+        nameEntities,
         nameSize,
         nameColor,
         0,
@@ -801,7 +870,7 @@ class QuoteGenerate {
     if (message.avatar) avatarCanvas = await this.drawAvatar(message.from)
 
     let replyName, replyText
-    if (message.replyMessage.name && message.replyMessage.text) {
+    if (message.replyMessage && message.replyMessage.name && message.replyMessage.text) {
       const replyNameIndex = Math.abs(message.replyMessage.chatId) % 7
       const replyNameColor = nameColorArray[replyNameIndex]
 
