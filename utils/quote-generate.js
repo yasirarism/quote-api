@@ -40,6 +40,74 @@ const avatarCache = new LRU({
   max: 20,
   maxAge: 1000 * 60 * 5
 })
+
+// write a nodejs function that accepts 2 colors. the first is the background color and the second is the text color. as a result, the first color should come out brighter or darker depending on the contrast. for example, if the first text is dark, then make the second brighter and return it. you need to change not the background color, but the text color
+
+// here are all the possible colors that will be passed as the second argument. the first color can be any
+class ColorContrast {
+  constructor() {
+    this.brightnessThreshold = 175; // A threshold to determine when a color is considered bright or dark
+  }
+
+  getBrightness(color) {
+    // Calculates the brightness of a color using the formula from the WCAG 2.0
+    // See: https://www.w3.org/TR/WCAG20-TECHS/G18.html#G18-tests
+    const [r, g, b] = this.hexToRgb(color);
+    return (r * 299 + g * 587 + b * 114) / 1000;
+  }
+
+  hexToRgb(hex) {
+    // Converts a hex color string to an RGB array
+    const r = parseInt(hex.substring(1, 3), 16);
+    const g = parseInt(hex.substring(3, 5), 16);
+    const b = parseInt(hex.substring(5, 7), 16);
+    return [r, g, b];
+  }
+
+  rgbToHex([r, g, b]) {
+    // Converts an RGB array to a hex color string
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  adjustBrightness(color, amount) {
+    // Adjusts the brightness of a color by a specified amount
+    const [r, g, b] = this.hexToRgb(color);
+    const newR = Math.max(0, Math.min(255, r + amount));
+    const newG = Math.max(0, Math.min(255, g + amount));
+    const newB = Math.max(0, Math.min(255, b + amount));
+    return this.rgbToHex([newR, newG, newB]);
+  }
+
+  getContrastRatio(background, foreground) {
+    // Calculates the contrast ratio between two colors using the formula from the WCAG 2.0
+    // See: https://www.w3.org/TR/WCAG20-TECHS/G18.html#G18-tests
+    const brightness1 = this.getBrightness(background);
+    const brightness2 = this.getBrightness(foreground);
+    const lightest = Math.max(brightness1, brightness2);
+    const darkest = Math.min(brightness1, brightness2);
+    return (lightest + 0.05) / (darkest + 0.05);
+  }
+
+  adjustContrast(background, foreground) {
+    // Adjusts the brightness of the foreground color to meet the minimum contrast ratio
+    // with the background color
+    const contrastRatio = this.getContrastRatio(background, foreground);
+    const brightnessDiff = this.getBrightness(background) - this.getBrightness(foreground);
+    if (contrastRatio >= 4.5) {
+      return foreground; // The contrast ratio is already sufficient
+    } else if (brightnessDiff >= 0) {
+      // The background is brighter than the foreground
+      const amount = Math.ceil((this.brightnessThreshold - this.getBrightness(foreground)) / 2);
+      return this.adjustBrightness(foreground, amount);
+    } else {
+      // The background is darker than the foreground
+      const amount = Math.ceil((this.getBrightness(foreground) - this.brightnessThreshold) / 2);
+      return this.adjustBrightness(foreground, -amount);
+    }
+  }
+}
+
+
 class QuoteGenerate {
   constructor (botToken) {
     this.telegram = new Telegram(botToken)
@@ -50,9 +118,12 @@ class QuoteGenerate {
     const canvas = createCanvas(size, size)
     const context = canvas.getContext('2d')
 
-    color = color || '#' + (Math.random() * 0xFFFFFF << 0).toString(16)
+    const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height)
 
-    context.fillStyle = color
+    gradient.addColorStop(0, color[0])
+    gradient.addColorStop(1, color[1])
+
+    context.fillStyle = gradient
     context.fillRect(0, 0, canvas.width, canvas.height)
 
     const drawLetters = await this.drawMultilineText(
@@ -90,13 +161,13 @@ class QuoteGenerate {
     const avatarImageCache = avatarCache.get(cacheKey)
 
     const avatarColorArray = [
-      '#FF516A',
-      '#FFA85C',
-      '#665FFF',
-      '#54CB68',
-      '#28C9B7',
-      '#2A9EF1',
-      '#D669ED'
+      [ '#FF885E', '#FF516A' ], // red
+      [ '#FFCD6A', '#FFA85C' ], // orange
+      [ '#E0A2F3', '#D669ED' ], // purple
+      [ '#A0DE7E', '#54CB68' ], // green
+      [ '#53EDD6', '#28C9B7' ], // sea
+      [ '#72D5FD', '#2A9EF1' ], // blue
+      [ '#FFA8A8', '#FF719A' ] // pink
     ]
 
     const nameIndex = Math.abs(user.id) % 7
@@ -362,23 +433,25 @@ class QuoteGenerate {
 
     const loadCustomEmojiStickerPromises = []
 
-    for (let index = 0; index < getCustomEmojiStickers.length; index++) {
-      const sticker = getCustomEmojiStickers[index]
+    if (getCustomEmojiStickers) {
+      for (let index = 0; index < getCustomEmojiStickers.length; index++) {
+        const sticker = getCustomEmojiStickers[index]
 
-      loadCustomEmojiStickerPromises.push((async () => {
-        const getFileLink = await this.telegram.getFileLink(sticker.thumb.file_id).catch(() => {})
+        loadCustomEmojiStickerPromises.push((async () => {
+          const getFileLink = await this.telegram.getFileLink(sticker.thumb.file_id).catch(() => {})
 
-        if (getFileLink) {
-          const load = await loadImageFromUrl(getFileLink).catch(() => {})
-          const imageSharp = sharp(load)
-          const sharpPng = await imageSharp.png({ lossless: true, force: true }).toBuffer()
+          if (getFileLink) {
+            const load = await loadImageFromUrl(getFileLink).catch(() => {})
+            const imageSharp = sharp(load)
+            const sharpPng = await imageSharp.png({ lossless: true, force: true }).toBuffer()
 
-          customEmojiStickers[sticker.custom_emoji_id] = await loadImage(sharpPng).catch(() => {})
-        }
-      })())
+            customEmojiStickers[sticker.custom_emoji_id] = await loadImage(sharpPng).catch(() => {})
+          }
+        })())
+      }
+
+      await Promise.all(loadCustomEmojiStickerPromises).catch(() => {})
     }
-
-    await Promise.all(loadCustomEmojiStickerPromises).catch(() => {})
 
     let breakWrite = false
     for (let index = 0; index < styledWords.length; index++) {
@@ -415,7 +488,7 @@ class QuoteGenerate {
         fontType += 'italic '
       }
       if (styledWord.style.includes('monospace')) {
-        fontName = 'SFNSMono'
+        fontName = 'NotoSansMono'
         fillStyle = '#5887a7'
       }
       if (styledWord.style.includes('mention')) {
@@ -520,6 +593,54 @@ class QuoteGenerate {
     return canvas
   }
 
+  drawGradientRoundRect (colorOne, colorTwo, w, h, r) {
+    const x = 0
+    const y = 0
+
+    const canvas = createCanvas(w, h)
+    const canvasCtx = canvas.getContext('2d')
+
+    const gradient = canvasCtx.createLinearGradient(0, 0, w, h)
+    gradient.addColorStop(0, colorOne)
+    gradient.addColorStop(1, colorTwo)
+
+    canvasCtx.fillStyle = gradient
+
+    if (w < 2 * r) r = w / 2
+    if (h < 2 * r) r = h / 2
+    canvasCtx.beginPath()
+    canvasCtx.moveTo(x + r, y)
+    canvasCtx.arcTo(x + w, y, x + w, y + h, r)
+    canvasCtx.arcTo(x + w, y + h, x, y + h, r)
+    canvasCtx.arcTo(x, y + h, x, y, r)
+    canvasCtx.arcTo(x, y, x + w, y, r)
+    canvasCtx.closePath()
+
+    canvasCtx.fill()
+
+    return canvas
+  }
+
+  colorLuminance (hex, lum) {
+    hex = String(hex).replace(/[^0-9a-f]/gi, '')
+    if (hex.length < 6) {
+      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+    }
+    lum = lum || 0
+
+    // convert to decimal and change luminosity
+    let rgb = '#'
+    let c
+    let i
+    for (i = 0; i < 3; i++) {
+      c = parseInt(hex.substr(i * 2, 2), 16)
+      c = Math.round(Math.min(Math.max(0, c + (c * lum)), 255)).toString(16)
+      rgb += ('00' + c).substr(c.length)
+    }
+
+    return rgb
+  }
+
   roundImage (image, r) {
     const w = image.width
     const h = image.height
@@ -618,24 +739,25 @@ class QuoteGenerate {
     return canvas
   }
 
-  async drawQuote (scale = 1, backgroundColor, avatar, replyName, replyText, name, text, media, mediaType, maxMediaSize) {
-    const blockPosX = 55 * scale
+  async drawQuote (scale = 1, backgroundColorOne, backgroundColorTwo, avatar, replyName, replyNameColor, replyText, name, text, media, mediaType, maxMediaSize) {
+    const avatarPosX = 0 * scale
+    const avatarPosY = 5 * scale
+    const avatarSize = 50 * scale
+
+    const blockPosX = avatarSize + 10 * scale
     const blockPosY = 0
 
-    const indent = 15 * scale
-
-    const avatarPosX = 0
-    const avatarPosY = 15
-    const avatarSize = 50 * scale
+    const indent = 14 * scale
 
     if (mediaType === 'sticker') name = undefined
 
     let width = 0
     if (name) width = name.width
-    if (text && width < text.width) width = text.width + indent
+    if (text && width < text.width + indent) width = text.width + indent
+    if (name && width < name.width + indent) width = name.width + indent
     if (replyName) {
-      if (width < replyName.width) width = replyName.width + indent
-      if (width < replyText.width) width = replyText.width + indent
+      if (width < replyName.width) width = replyName.width + indent * 2
+      if (width < replyText.width) width = replyText.width + indent * 2
     }
 
     let height = indent
@@ -648,7 +770,7 @@ class QuoteGenerate {
       else height += indent
     }
 
-    width += blockPosX + (indent * 2)
+    width += blockPosX + indent
     height += blockPosY
 
     let namePosX = blockPosX + indent
@@ -661,7 +783,10 @@ class QuoteGenerate {
 
     const textPosX = blockPosX + indent
     let textPosY = indent
-    if (name) textPosY = name.height
+    if (name) {
+      textPosY = name.height + indent * 0.25
+      height += indent * 0.25
+    }
 
     let replyPosX = 0
     let replyNamePosY = 0
@@ -670,14 +795,14 @@ class QuoteGenerate {
     if (replyName) {
       replyPosX = textPosX + indent
 
-      const replyNameHeight = replyName.height * 1.2
+      const replyNameHeight = replyName.height
       const replyTextHeight = replyText.height * 0.5
 
       replyNamePosY = namePosY + replyNameHeight
       replyTextPosY = replyNamePosY + replyTextHeight
 
-      textPosY += replyNameHeight + replyTextHeight + (indent / 2)
-      height += replyNameHeight + replyTextHeight + (indent / 2)
+      textPosY += replyNameHeight + replyTextHeight + (indent / 4)
+      height += replyNameHeight + replyTextHeight + (indent / 4)
     }
 
     let mediaPosX = 0
@@ -731,7 +856,13 @@ class QuoteGenerate {
       rectHeight -= mediaHeight + indent * 2
     }
 
-    if (mediaType !== 'sticker' || name || replyName) rect = this.drawRoundRect(backgroundColor, rectWidth, rectHeight, rectRoundRadius)
+    if (mediaType !== 'sticker' || name || replyName) {
+      if (backgroundColorOne === backgroundColorTwo) {
+        rect = this.drawRoundRect(backgroundColorOne, rectWidth, rectHeight, rectRoundRadius)
+      } else {
+        rect = this.drawGradientRoundRect(backgroundColorOne, backgroundColorTwo, rectWidth, rectHeight, rectRoundRadius)
+      }
+    }
 
     if (avatar) canvasCtx.drawImage(avatar, avatarPosX, avatarPosY, avatarSize, avatarSize)
     if (rect) canvasCtx.drawImage(rect, rectPosX, rectPosY)
@@ -740,10 +871,7 @@ class QuoteGenerate {
     if (media) canvasCtx.drawImage(this.roundImage(media, 5 * scale), mediaPosX, mediaPosY, mediaWidth, mediaHeight)
 
     if (replyName) {
-      const backStyle = this.lightOrDark(backgroundColor)
-      let lineColor = '#fff'
-      if (backStyle === 'light') lineColor = '#000'
-      canvasCtx.drawImage(this.deawReplyLine(3 * scale, replyName.height + replyText.height * 0.4, lineColor), textPosX - 7, replyNamePosY)
+      canvasCtx.drawImage(this.deawReplyLine(3 * scale, replyName.height + replyText.height * 0.4, replyNameColor), textPosX - 3, replyNamePosY)
 
       canvasCtx.drawImage(replyName, replyPosX, replyNamePosY)
       canvasCtx.drawImage(replyText, replyPosX, replyTextPosY)
@@ -762,49 +890,77 @@ class QuoteGenerate {
     return color
   }
 
-  async generate (backgroundColor, message, width = 512, height = 512, scale = 2, emojiBrand = 'apple') {
+  async generate (backgroundColorOne, backgroundColorTwo, message, width = 512, height = 512, scale = 2, emojiBrand = 'apple') {
     if (!scale) scale = 2
     if (scale > 20) scale = 20
     width *= scale
     height *= scale
 
     // check background style color black/light
-    const backStyle = this.lightOrDark(backgroundColor)
+    const backStyle = this.lightOrDark(backgroundColorOne)
 
-    // name light style color
+
+    // historyPeer1NameFg: #c03d33; // red
+    // historyPeer2NameFg: #4fad2d; // green
+    // historyPeer3NameFg: #d09306; // yellow
+    // historyPeer4NameFg: #168acd; // blue
+    // historyPeer5NameFg: #8544d6; // purple
+    // historyPeer6NameFg: #cd4073; // pink
+    // historyPeer7NameFg: #2996ad; // sea
+    // historyPeer8NameFg: #ce671b; // orange
+
+    // { 0, 7, 4, 1, 6, 3, 5 }
+    // const nameColor = [
+    //   '#c03d33', // red
+    //   '#ce671b', // orange
+    //   '#8544d6', // purple
+    //   '#4fad2d', // green
+    //   '#2996ad', // sea
+    //   '#168acd', // blue
+    //   '#cd4073' // pink
+    // ]
+
     const nameColorLight = [
-      '#FC5C51',
-      '#FA790F',
-      '#895DD5',
-      '#0FB297',
-      '#00C1A6',
-      '#3CA5EC',
-      '#3D72ED'
+      '#FC5C51', // red
+      '#FA790F', // orange
+      '#895DD5', // purple
+      '#0FB297', // green
+      '#0FC9D6', // sea
+      '#3CA5EC', // blue
+      '#D54FAF' // pink
     ]
 
     const nameColorDark = [
-      '#FF8E86',
-      '#FFA357',
-      '#BF9AFF',
-      '#4DD6BF',
-      '#45E8D1',
-      '#7AC9FF',
-      '#7AA2FF'
+      '#FF8E86', // red
+      '#FFA357', // orange
+      '#B18FFF', // purple
+      '#4DD6BF', // green
+      '#45E8D1', // sea
+      '#7AC9FF', // blue
+      '#FF7FD5' // pink
     ]
-
-    const nameColorArray = backStyle === 'light' ? nameColorLight : nameColorDark
 
     // user name  color
     let nameIndex = 1
-    if (message.chatId) nameIndex = Math.abs(message.chatId) % 7
+    if (message.from.id) nameIndex = Math.abs(message.from.id) % 7
 
-    const nameColor = nameColorArray[nameIndex]
+    const nameColorArray = backStyle === 'light' ? nameColorLight : nameColorDark
+
+    let nameColor = nameColorArray[nameIndex]
+
+    const colorContrast = new ColorContrast()
+
+    // change name color based on background color by contrast
+    const contrast = colorContrast.getContrastRatio(this.colorLuminance(backgroundColorOne, 0.55), nameColor)
+    if (contrast > 90 || contrast < 30) {
+      nameColor = colorContrast.adjustContrast(this.colorLuminance(backgroundColorTwo, 0.55), nameColor)
+    }
 
     const nameSize = 22 * scale
 
     let nameCanvas
     if (message?.from?.name) {
-      let name = message.from.name.trim()
+      let name = message.from.name
 
       const nameEntities = [
         {
@@ -838,15 +994,7 @@ class QuoteGenerate {
       )
     }
 
-    // const minFontSize = 18
-    // const maxFontSize = 28
-
-    // let fontSize = 25 / ((text.length / 10) * 0.2)
-
-    // if (fontSize < minFontSize) fontSize = minFontSize
-    // if (fontSize > maxFontSize) fontSize = maxFontSize
-
-    const fontSize = 24 * scale
+    let fontSize = 24 * scale
 
     let textColor = '#fff'
     if (backStyle === 'light') textColor = '#000'
@@ -869,10 +1017,10 @@ class QuoteGenerate {
     let avatarCanvas
     if (message.avatar) avatarCanvas = await this.drawAvatar(message.from)
 
-    let replyName, replyText
+    let replyName, replyNameColor, replyText
     if (message.replyMessage && message.replyMessage.name && message.replyMessage.text) {
       const replyNameIndex = Math.abs(message.replyMessage.chatId) % 7
-      const replyNameColor = nameColorArray[replyNameIndex]
+      replyNameColor = nameColorArray[replyNameIndex]
 
       const replyNameFontSize = 16 * scale
       if (message.replyMessage.name) {
@@ -938,9 +1086,9 @@ class QuoteGenerate {
 
     const quote = this.drawQuote(
       scale,
-      backgroundColor,
+      backgroundColorOne, backgroundColorTwo,
       avatarCanvas,
-      replyName, replyText,
+      replyName, replyNameColor, replyText,
       nameCanvas, textCanvas,
       mediaCanvas, mediaType, maxMediaSize
     )
